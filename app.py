@@ -1,11 +1,12 @@
 import os
+import pandas as pd
 import qrcode
 from flask import Flask, render_template, request, send_file
+
 from openpyxl import load_workbook
 from openpyxl.drawing.image import Image
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
-from openpyxl.utils.cell import format_cell
 
 # ---------------- FLASK APP ----------------
 app = Flask(__name__)
@@ -53,15 +54,36 @@ def generate_qr(data, path):
     img.save(path)
 
 
-def get_visible_cell_value(cell):
-    """
-    🔒 CRITICAL FUNCTION
-    Returns EXACT text visible in Excel
-    Keeps 1.00, 56,000, 00123 exactly as-is
-    """
-    if cell.value is None:
+# ✅ READ EXACT DISPLAY VALUE FROM EXCEL (CRITICAL FIX)
+def excel_display_value(ws, row_idx, col_idx):
+    cell = ws.cell(row=row_idx, column=col_idx)
+    val = cell.value
+
+    if val is None:
         return ""
-    return format_cell(cell)
+
+    # Keep numbers EXACTLY as Excel shows
+    if isinstance(val, (int, float)):
+        fmt = cell.number_format
+        try:
+            if "," in fmt:
+                return format(val, ",")
+            if "." in fmt:
+                decimals = fmt.split(".")[-1].count("0")
+                return f"{val:.{decimals}f}"
+        except:
+            pass
+        return str(val)
+
+    return str(val)
+
+
+def build_qr_text(ws, row_idx, selected_col_indexes):
+    parts = []
+    for col_idx in selected_col_indexes:
+        value = excel_display_value(ws, row_idx, col_idx)
+        parts.append(value if value != "" else "|")
+    return " ".join(parts)
 
 
 # ---------------- ROUTES ----------------
@@ -73,10 +95,8 @@ def upload():
         file_path = os.path.join(UPLOAD_FOLDER, file.filename)
         file.save(file_path)
 
-        wb = load_workbook(file_path, data_only=False)
-        ws = wb.active
-
-        columns = [cell.value for cell in ws[1]]
+        df = pd.read_excel(file_path)
+        columns = list(df.columns)
 
         return render_template(
             "columns.html",
@@ -91,41 +111,47 @@ def upload():
 def generate():
     file_path = request.form["file_path"]
     selected_cols = request.form.getlist("columns")
-    selected_norm = [normalize(c) for c in selected_cols]
 
-    wb = load_workbook(file_path, data_only=False)
+    # Load workbook for exact formatting
+    wb_input = load_workbook(file_path, data_only=False)
+    ws_input = wb_input.active
+
+    headers = [normalize(c.value) for c in ws_input[1]]
+    selected_indexes = [
+        headers.index(normalize(c)) + 1 for c in selected_cols
+    ]
+
+    df = pd.read_excel(file_path)
+
+    df["QR_Image_Path"] = ""
+    df["QR"] = ""
+
+    for r in range(2, ws_input.max_row + 1):
+        qr_text = build_qr_text(ws_input, r, selected_indexes)
+        img_name = f"qr_{r-1}.png"
+        img_path = os.path.join(QR_FOLDER, img_name)
+        generate_qr(qr_text, img_path)
+        df.at[r-2, "QR_Image_Path"] = img_path
+
+    output_path = os.path.join(OUTPUT_FOLDER, "output_with_qr.xlsx")
+    df.to_excel(output_path, index=False)
+
+    # Insert QR images
+    wb = load_workbook(output_path)
     ws = wb.active
 
-    headers = {normalize(c.value): i + 1 for i, c in enumerate(ws[1])}
-
-    # Add QR headers
-    qr_col = ws.max_column + 1
-    path_col = ws.max_column + 2
-    ws.cell(1, qr_col).value = "QR"
-    ws.cell(1, path_col).value = "QR_Image_Path"
+    headers_out = {normalize(c.value): i + 1 for i, c in enumerate(ws[1])}
+    qr_col = headers_out["qr"]
+    path_col = headers_out["qr_image_path"]
 
     for r in range(2, ws.max_row + 1):
-        parts = []
-
-        for col in selected_norm:
-            if col not in headers:
-                parts.append("|")
-            else:
-                cell = ws.cell(r, headers[col])
-                text = get_visible_cell_value(cell)
-                parts.append(text if text else "|")
-
-        qr_text = " ".join(parts)
-
-        img_path = os.path.join(QR_FOLDER, f"qr_{r}.png")
-        generate_qr(qr_text, img_path)
-
-        ws.cell(r, path_col).value = img_path
+        img_path = ws.cell(r, path_col).value
+        if not img_path or not os.path.exists(img_path):
+            continue
 
         img = Image(img_path)
         img.width = QR_PX
         img.height = QR_PX
-
         ws.add_image(img, ws.cell(r, qr_col).coordinate)
         ws.row_dimensions[r].height = ROW_HEIGHT
         ws.cell(r, qr_col).alignment = Alignment(horizontal="center", vertical="center")
@@ -133,7 +159,6 @@ def generate():
     ws.column_dimensions[get_column_letter(qr_col)].width = QR_COL_WIDTH
     ws.column_dimensions[get_column_letter(path_col)].width = PATH_COL_WIDTH
 
-    output_path = os.path.join(OUTPUT_FOLDER, "output_with_qr.xlsx")
     wb.save(output_path)
 
     return render_template("download.html")
@@ -145,6 +170,6 @@ def download_file():
     return send_file(output_path, as_attachment=True)
 
 
-# ---------------- RUN LOCAL ----------------
+# ---------------- RUN ----------------
 if __name__ == "__main__":
     app.run(debug=True)
