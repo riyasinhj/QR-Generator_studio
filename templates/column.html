@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Select Columns</title>
+</head>
+<body>
+  <h2>Select Columns for QR</h2>
+
+  <form method="POST" action="/generate">
+    <input type="hidden" name="file_path" value="{{ file_path }}">
+
+    {% for col in columns %}
+      <input type="checkbox" name="columns" value="{{ col }}"> {{ col }} <br>
+    {% endfor %}
+
+    <br>
+    <button type="submit">Generate QR</button>
+  </form>
+</body>
+</html>
