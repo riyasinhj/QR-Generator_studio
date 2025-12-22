@@ -1,20 +1,91 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Select Columns</title>
+    <meta charset="UTF-8">
+    <title>Select Columns | QR Generator Studio</title>
+
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: url("/static/bg.jpg") no-repeat center center fixed;
+            background-size: cover;
+        }
+
+        .overlay {
+            background: rgba(0, 0, 0, 0.6);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .box {
+            background: white;
+            padding: 30px 40px;
+            border-radius: 12px;
+            width: 500px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+        }
+
+        h2 {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        .columns {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+
+        label {
+            font-size: 15px;
+            cursor: pointer;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            background: #0078ff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #005fd1;
+        }
+    </style>
 </head>
+
 <body>
-  <h2>Select Columns for QR</h2>
+<div class="overlay">
+    <div class="box">
+        <h2>Select Columns for QR</h2>
 
-  <form method="POST" action="/generate">
-    <input type="hidden" name="file_path" value="{{ file_path }}">
+        <form method="POST" action="/generate">
+            <!-- hidden file path -->
+            <input type="hidden" name="file_path" value="{{ file_path }}">
 
-    {% for col in columns %}
-      <input type="checkbox" name="columns" value="{{ col }}"> {{ col }} <br>
-    {% endfor %}
+            <div class="columns">
+                {% for col in columns %}
+                    <label>
+                        <input type="checkbox" name="columns" value="{{ col }}">
+                        {{ col }}
+                    </label>
+                {% endfor %}
+            </div>
 
-    <br>
-    <button type="submit">Generate QR</button>
-  </form>
+            <button type="submit">Generate QR & Download</button>
+        </form>
+    </div>
+</div>
 </body>
 </html>
