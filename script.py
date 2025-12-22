@@ -54,30 +54,20 @@ def generate_qr(data, path):
     img.save(path)
 
 
-# ✅ ONLY CHANGE IS HERE (decimal-safe)
 def build_qr_text(row, selected_cols):
     """
     RULE:
-    - Value present → keep exact formatting (1.00 → 1.00)
-    - Value missing/empty → |
+    - Value present → exact value
+    - Value missing → |
     - Separator → single space
     """
     parts = []
-
     for col in selected_cols:
         val = row.get(col, "")
-
-        if pd.isna(val) or str(val).strip() == "":
+        if val == "":
             parts.append("|")
         else:
-            # Preserve decimal values exactly
-            if isinstance(val, float):
-                text = format(val, ".2f")
-            else:
-                text = str(val).strip()
-
-            parts.append(text)
-
+            parts.append(val)
     return " ".join(parts)
 
 
@@ -90,7 +80,8 @@ def upload():
         file_path = os.path.join(UPLOAD_FOLDER, file.filename)
         file.save(file_path)
 
-        df = pd.read_excel(file_path)
+        # ✅ FIX: read Excel as TEXT (keeps 56,000 / 1.00 exactly)
+        df = pd.read_excel(file_path, dtype=str).fillna("")
         columns = list(df.columns)
 
         return render_template(
@@ -107,7 +98,9 @@ def generate():
     file_path = request.form["file_path"]
     selected_cols = request.form.getlist("columns")
 
-    df = pd.read_excel(file_path)
+    # ✅ FIX: read Excel as TEXT (keeps formatting)
+    df = pd.read_excel(file_path, dtype=str).fillna("")
+
     df_norm = df.copy()
     df_norm.columns = [normalize(c) for c in df_norm.columns]
     selected_norm = [normalize(c) for c in selected_cols]
@@ -125,7 +118,7 @@ def generate():
     output_path = os.path.join(OUTPUT_FOLDER, "output_with_qr.xlsx")
     df.to_excel(output_path, index=False)
 
-    # Insert QR images
+    # -------- INSERT QR IMAGES --------
     wb = load_workbook(output_path)
     ws = wb.active
 
@@ -141,6 +134,7 @@ def generate():
         img = Image(img_path)
         img.width = QR_PX
         img.height = QR_PX
+
         ws.add_image(img, ws.cell(r, qr_col).coordinate)
         ws.row_dimensions[r].height = ROW_HEIGHT
         ws.cell(r, qr_col).alignment = Alignment(horizontal="center", vertical="center")
@@ -153,9 +147,9 @@ def generate():
     return render_template("download.html")
 
 
-@app.route("/download")
+@app.route("/download", methods=["GET"])
 def download_file():
-    output_path = os.path.join(BASE_DIR, "outputs", "output_with_qr.xlsx")
+    output_path = os.path.join(OUTPUT_FOLDER, "output_with_qr.xlsx")
     return send_file(output_path, as_attachment=True)
 
 
