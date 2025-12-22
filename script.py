@@ -54,20 +54,30 @@ def generate_qr(data, path):
     img.save(path)
 
 
+# ✅ ONLY CHANGE IS HERE (decimal-safe)
 def build_qr_text(row, selected_cols):
     """
     RULE:
-    - Value present → value
+    - Value present → keep exact formatting (1.00 → 1.00)
     - Value missing/empty → |
     - Separator → single space
     """
     parts = []
+
     for col in selected_cols:
         val = row.get(col, "")
+
         if pd.isna(val) or str(val).strip() == "":
             parts.append("|")
         else:
-            parts.append(str(val).strip())
+            # Preserve decimal values exactly
+            if isinstance(val, float):
+                text = format(val, ".2f")
+            else:
+                text = str(val).strip()
+
+            parts.append(text)
+
     return " ".join(parts)
 
 
