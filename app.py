@@ -1,7 +1,8 @@
 import os
 import pandas as pd
 import qrcode
-from flask import Flask, render_template, request, send_file
+from flask import Flask, render_template, request, send_file, send_from_directory
+
 from openpyxl import load_workbook
 from openpyxl.drawing.image import Image
 from openpyxl.styles import Alignment
@@ -21,6 +22,9 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 os.makedirs(QR_FOLDER, exist_ok=True)
 
+# 🔴 IMPORTANT: Your Render public URL
+PUBLIC_BASE_URL = "https://qr-generator-studio-vf7g.onrender.com"
+
 # ---------------- QR CONFIG ----------------
 QR_MM = 9
 PIXELS_PER_MM = 96 / 25.4
@@ -32,13 +36,7 @@ PATH_COL_WIDTH = 95
 
 
 def normalize(text):
-    return (
-        str(text)
-        .replace("\xa0", " ")
-        .replace("\u200b", "")
-        .strip()
-        .lower()
-    )
+    return str(text).strip().lower()
 
 
 def generate_qr(data, path):
@@ -54,21 +52,23 @@ def generate_qr(data, path):
     img.save(path)
 
 
+def preserve_exact_value(val):
+    """
+    VERY IMPORTANT:
+    - Keeps 1.00 as '1.00'
+    - Keeps 95,000 as '95,000'
+    - Keeps text EXACTLY as in Excel
+    """
+    if pd.isna(val):
+        return "|"
+
+    return str(val).strip()
+
+
 def build_qr_text(row, selected_cols):
-    """
-    IMPORTANT RULE:
-    - Values are used EXACTLY AS READ (NO formatting change)
-    - Empty → |
-    - Separator → space
-    """
     parts = []
     for col in selected_cols:
-        val = row.get(col, "")
-        if pd.isna(val) or str(val).strip() == "":
-            parts.append("|")
-        else:
-            # KEEP ORIGINAL VALUE AS STRING
-            parts.append(str(val))
+        parts.append(preserve_exact_value(row[col]))
     return " ".join(parts)
 
 
@@ -81,14 +81,14 @@ def upload():
         file_path = os.path.join(UPLOAD_FOLDER, file.filename)
         file.save(file_path)
 
-        # READ AS STRING → prevents 95,000 → 95000 or 1.00 → 1
+        # IMPORTANT: read as STRING to preserve format
         df = pd.read_excel(file_path, dtype=str)
         columns = list(df.columns)
 
         return render_template(
             "columns.html",
             columns=columns,
-            file_path=file_path
+            file_path=file.filename
         )
 
     return render_template("upload.html")
@@ -96,46 +96,45 @@ def upload():
 
 @app.route("/generate", methods=["POST"])
 def generate():
-    file_path = request.form["file_path"]
+    file_name = request.form["file_path"]
     selected_cols = request.form.getlist("columns")
 
-    # READ EVERYTHING AS STRING
-    df = pd.read_excel(file_path, dtype=str)
-    df_norm = df.copy()
-    df_norm.columns = [normalize(c) for c in df_norm.columns]
-    selected_norm = [normalize(c) for c in selected_cols]
+    file_path = os.path.join(UPLOAD_FOLDER, file_name)
 
-    df["QR_Image_Path"] = ""
+    # READ AS STRING (CRITICAL FIX)
+    df = pd.read_excel(file_path, dtype=str)
+
+    df["QR_Image_URL"] = ""
     df["QR"] = ""
 
-    for i, row in df_norm.iterrows():
-        qr_text = build_qr_text(row, selected_norm)
+    for i, row in df.iterrows():
+        qr_text = build_qr_text(row, selected_cols)
 
         img_name = f"qr_{i+1}.png"
         img_path = os.path.join(QR_FOLDER, img_name)
 
-        # 🔑 PUBLIC URL (NOT SERVER PATH)
-        public_qr_url = request.host_url.rstrip("/") + "/qr/" + img_name
+        generate_qr(qr_text, img_path)
 
-        generate_qr(public_qr_url, img_path)
-
-        df.at[i, "QR_Image_Path"] = img_path
+        # ✅ PUBLIC URL (MAIL MERGE SAFE)
+        qr_url = f"{PUBLIC_BASE_URL}/qr/{img_name}"
+        df.at[i, "QR_Image_URL"] = qr_url
         df.at[i, "QR"] = qr_text
 
     output_path = os.path.join(OUTPUT_FOLDER, "output_with_qr.xlsx")
     df.to_excel(output_path, index=False)
 
-    # INSERT QR IMAGES
+    # ---------- INSERT QR IMAGE INTO EXCEL ----------
     wb = load_workbook(output_path)
     ws = wb.active
 
     headers = {normalize(c.value): i + 1 for i, c in enumerate(ws[1])}
     qr_col = headers["qr"]
-    path_col = headers["qr_image_path"]
 
     for r in range(2, ws.max_row + 1):
-        img_path = ws.cell(r, path_col).value
-        if not img_path or not os.path.exists(img_path):
+        img_name = f"qr_{r-1}.png"
+        img_path = os.path.join(QR_FOLDER, img_name)
+
+        if not os.path.exists(img_path):
             continue
 
         img = Image(img_path)
@@ -144,23 +143,18 @@ def generate():
 
         ws.add_image(img, ws.cell(r, qr_col).coordinate)
         ws.row_dimensions[r].height = ROW_HEIGHT
-        ws.cell(r, qr_col).alignment = Alignment(
-            horizontal="center",
-            vertical="center"
-        )
+        ws.cell(r, qr_col).alignment = Alignment(horizontal="center", vertical="center")
 
     ws.column_dimensions[get_column_letter(qr_col)].width = QR_COL_WIDTH
-    ws.column_dimensions[get_column_letter(path_col)].width = PATH_COL_WIDTH
-
     wb.save(output_path)
 
     return render_template("download.html")
 
 
-# 🔑 PUBLIC QR ACCESS (VERY IMPORTANT)
+# ✅ PUBLIC QR IMAGE ROUTE (THIS FIXES YOUR PATH ISSUE)
 @app.route("/qr/<filename>")
 def serve_qr(filename):
-    return send_file(os.path.join(QR_FOLDER, filename))
+    return send_from_directory(QR_FOLDER, filename)
 
 
 @app.route("/download")
@@ -169,6 +163,6 @@ def download_file():
     return send_file(output_path, as_attachment=True)
 
 
-# ---------------- RUN LOCAL ----------------
+# ---------------- LOCAL RUN ----------------
 if __name__ == "__main__":
     app.run(debug=True)
